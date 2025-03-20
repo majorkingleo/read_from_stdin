@@ -4,116 +4,114 @@
 #include <thread>
 
 #ifdef _WIN32
-#	include <winsock2.h>
+#   include <winsock2.h>
 #   include <windows.h>
 #else
-#	include <sys/select.h>
-#	include <unistd.h>
+#   include <sys/select.h>
+#   include <unistd.h>
 #endif
-
 
 #ifdef _WIN32
 /**
  * reads from stdin with timeout, or nonblocking.
- * Depending whatever the input source is (consolse, pipe or file)
+ * Depending whatever the input source is (console, pipe or file)
  */
 static bool read_available_data_from_stdin( std::list<int> & msg )
 {
-	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
 
-	if( hStdin == INVALID_HANDLE_VALUE ) {
-		std::cerr <<  "INVALID_HANDLE_VALUE";
-		return false;
-	}
+    if( hStdin == INVALID_HANDLE_VALUE ) {
+        std::cerr <<  "INVALID_HANDLE_VALUE";
+        return false;
+    }
 
-	DWORD fileType = GetFileType(hStdin);
-	if (fileType == FILE_TYPE_PIPE) {
+    DWORD fileType = GetFileType(hStdin);
 
-		unsigned int length = 0;
-	    DWORD bytesAvailable = 0;
-	    BOOL success = PeekNamedPipe(hStdin,NULL,0,NULL,&bytesAvailable,NULL);
+    // 1) handle pipes 
+    if (fileType == FILE_TYPE_PIPE) {
+        unsigned int length = 0;
+        DWORD bytesAvailable = 0;
+        BOOL success = PeekNamedPipe(hStdin,NULL,0,NULL,&bytesAvailable,NULL);
 
-	    if( !success ) {
-	    	// pipe is closed
-	    	if( msg.empty() || msg.back() != EOF ) {
-	    		msg.push_back( EOF );
-	    	}
-	    	return false;
-	    }
+        if( !success ) {
+            // pipe is closed
+            if( msg.empty() || msg.back() != EOF ) {
+                msg.push_back( EOF );
+            }
+            return false;
+        }
 
-	    if(bytesAvailable > 0) {
+        if(bytesAvailable > 0) {
+            for (int i = 0; i < bytesAvailable; i++) {
+                char c = getchar();
+                msg.push_back( c );
+            }
 
-	        for (int i = 0; i < bytesAvailable; i++) {
-	        	char c = getchar();
-	            msg.push_back( c );
-	        }
+            return true;
+        }
 
-	        return true;
-	    }
+        return false;
+    }
 
-	    return false;
-	}
+    // handle character sources like console input
+    if( fileType == FILE_TYPE_CHAR ) {
+        HANDLE eventHandles[] = { hStdin };
 
-	if( fileType == FILE_TYPE_CHAR ) {
+        DWORD result = WSAWaitForMultipleEvents(sizeof(eventHandles)/sizeof(eventHandles[0]),
+                                                &eventHandles[0],
+                                                FALSE,
+                                                10,
+                                                TRUE );
 
-		HANDLE eventHandles[] = {
-				hStdin
-	    };
+        if( result == WSA_WAIT_EVENT_0 + 0 ) { // stdin at array index 0
+            DWORD cNumRead;
+            INPUT_RECORD irInBuf[128];
+            int counter=0;
 
-		DWORD result = WSAWaitForMultipleEvents(sizeof(eventHandles)/sizeof(eventHandles[0]),
-			&eventHandles[0],
-			FALSE,
-			10,
-			TRUE
-			);
+            if( ReadConsoleInput( hStdin, irInBuf, std::size(irInBuf), &cNumRead ) ) {
 
-		if( result == WSA_WAIT_EVENT_0 + 0 ) { // stdin at array index 0
-			DWORD cNumRead;
-			 INPUT_RECORD irInBuf[128];
-			 int counter=0;
+                // cNumRead is the number of characters available in the current input buffer
+                // we can read without blocking                
+                for( unsigned i = 0; i < cNumRead; ++i ) {
+                    switch(irInBuf[i].EventType)
+                    {
+                    case KEY_EVENT:
+                        if( irInBuf[i].Event.KeyEvent.bKeyDown ) {
 
-			if( ReadConsoleInput( hStdin, irInBuf, std::size(irInBuf), &cNumRead ) ) {
-				for( unsigned i = 0; i < cNumRead; ++i ) {
-					switch(irInBuf[i].EventType)
-					{
-					case KEY_EVENT:
-						if( irInBuf[i].Event.KeyEvent.bKeyDown ) {
-							char c = irInBuf[i].Event.KeyEvent.uChar.AsciiChar;
-							if( c && isascii( c ) ) {
-								// echo on
-								std::cout << c;
+                            // but filter out only ascii characters                            
+                            char c = irInBuf[i].Event.KeyEvent.uChar.AsciiChar;
+                            if( c && isascii( c ) ) {
+                                // echo on
+                                std::cout << c;
+                                msg.push_back( c );
+                            } // if
+                        } // if
+                    } // switch
+                } // for
 
-								msg.push_back( c );
-							}
-						}
-					}
-				}
+                return true;
+            } // if
+        } // if
+        return false;
+    } // if fileType == FILE_TYPE_CHAR
 
-				return true;
-			}
-		} // if
-		return false;
-	}
-
-	if( fileType == FILE_TYPE_DISK  ) {
-		char buffer[100];
-		DWORD NumberOfBytesRead = 0;
-		if( ReadFile( hStdin, &buffer, sizeof(buffer), &NumberOfBytesRead, NULL ) ) {
-
-			for( unsigned i = 0; i < NumberOfBytesRead; ++i ) {
-				msg.push_back( buffer[i] );
-			}
-
-			return true;
-
-		} else {
-			// pipe is closed
-			if( msg.empty() || msg.back() != EOF ) {
-				msg.push_back( EOF );
-			}
-			return false;
-		}
-	}
+    // file is a regular file on disc
+    if( fileType == FILE_TYPE_DISK  ) {
+        char buffer[100];
+        DWORD NumberOfBytesRead = 0;
+        if( ReadFile( hStdin, &buffer, sizeof(buffer), &NumberOfBytesRead, NULL ) ) {
+            for( unsigned i = 0; i < NumberOfBytesRead; ++i ) {
+                msg.push_back( buffer[i] );
+            }            
+            return true;
+        } else {
+            // end of file
+            if( msg.empty() || msg.back() != EOF ) {
+                msg.push_back( EOF );
+            }
+            return false;
+        }
+    }
 
     return false;
 }
@@ -127,7 +125,7 @@ static bool read_available_data_from_stdin( std::list<int> & msg )
 
 static bool read_available_data_from_stdin( std::list<int> & msg )
 {
-	// timeout structure passed into select
+    // timeout structure passed into select
     struct timeval tv;
     // fd_set passed into select
     fd_set fds;
@@ -146,28 +144,27 @@ static bool read_available_data_from_stdin( std::list<int> & msg )
     select(STDIN_FILENO+1, &fds, NULL, NULL, &tv);
     // return 0 if STDIN is not ready to be read.
     if( !FD_ISSET(STDIN_FILENO, &fds) ) {
-		return false;
-	}
+        return false;
+    }
 
-	std::string message;
-	std::getline( std::cin, message );
+    std::string message;
+    std::getline( std::cin, message );
 
-	if( !message.empty() ) {
-		for( unsigned i = 0; i < message.size(); ++i ) {
-			msg.push_back( message[i] );
-		}
-		msg.push_back( '\n' );
-	}
-
-
-	if( std::cin.eof() ) {
-		if( msg.empty() || msg.back() != EOF ) {
-			msg.push_back( EOF );
-		}
-	}
+    if( !message.empty() ) {
+        for( unsigned i = 0; i < message.size(); ++i ) {
+            msg.push_back( message[i] );
+        }
+        msg.push_back( '\n' );
+    }
 
 
-	return true;
+    if( std::cin.eof() ) {
+        if( msg.empty() || msg.back() != EOF ) {
+            msg.push_back( EOF );
+        }
+    }
+
+    return true;
 }
 
 #endif
@@ -175,40 +172,40 @@ static bool read_available_data_from_stdin( std::list<int> & msg )
 
 std::optional<char> get_char( std::chrono::steady_clock::duration duration = std::chrono::milliseconds(10) )
 {
-	static std::list<int> data;
+    static std::list<int> data;
 
-	for( ;; std::this_thread::sleep_for(duration) ) {
+    for( ;; std::this_thread::sleep_for(duration) ) {
 
-		read_available_data_from_stdin( data );
+        read_available_data_from_stdin( data );
 
-		if( data.empty() ) {
-			continue;
-		}
+        if( data.empty() ) {
+            continue;
+        }
 
-		int c = data.front();
-		data.pop_front();
+        int c = data.front();
+        data.pop_front();
 
-		return static_cast<char>(c);
-	}
+        return static_cast<char>(c);
+    }
 
-	return {};
+    return {};
 }
 
 
 int main()
 {
-	while( true ) {
-		std::optional<char> c = get_char();
+    while( true ) {
+        std::optional<char> c = get_char();
 
-		if( c && c == EOF ) {
-			break;
-		}
+        // end of file reached?
+        if( c && c == EOF ) {
+        break;
+        }
 
-		if( c ) {
-			std::cout << *c;
-		}
-	}
+        if( c ) {
+            std::cout << *c;
+        }
+    } // while
 
-	return 0;
+    return 0;
 }
-
