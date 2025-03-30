@@ -100,15 +100,18 @@ static bool read_available_data_from_stdin( std::list<int> & msg )
         char buffer[100];
         DWORD NumberOfBytesRead = 0;
         if( ReadFile( hStdin, &buffer, sizeof(buffer), &NumberOfBytesRead, NULL ) ) {
+
+          	// https://learn.microsoft.com/en-us/windows/win32/fileio/testing-for-the-end-of-a-file
+			if( NumberOfBytesRead == 0 ) {
+				msg.push_back( EOF );
+				return false;
+			}
+
             for( unsigned i = 0; i < NumberOfBytesRead; ++i ) {
                 msg.push_back( buffer[i] );
             }            
             return true;
         } else {
-            // end of file
-            if( msg.empty() || msg.back() != EOF ) {
-                msg.push_back( EOF );
-            }
             return false;
         }
     }
@@ -201,9 +204,13 @@ int main()
         if( c && c == EOF ) {
         break;
         }
-
         if( c ) {
-            std::cout << *c;
+
+        	if( *c == '\r' ) {
+        		std::cout << std::endl;
+        	} else {
+        		std::cout << *c;
+        	}
         }
     } // while
 
