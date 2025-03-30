@@ -3,15 +3,9 @@
 #include <optional>
 #include <thread>
 
-#ifdef _WIN32
-#   include <winsock2.h>
-#   include <windows.h>
-#else
-#   include <sys/select.h>
-#   include <unistd.h>
-#endif
+#include <winsock2.h>
+#include <windows.h>
 
-#ifdef _WIN32
 /**
  * reads from stdin with timeout, or nonblocking.
  * Depending whatever the input source is (console, pipe or file)
@@ -100,75 +94,24 @@ static bool read_available_data_from_stdin( std::list<int> & msg )
         char buffer[100];
         DWORD NumberOfBytesRead = 0;
         if( ReadFile( hStdin, &buffer, sizeof(buffer), &NumberOfBytesRead, NULL ) ) {
+
+        	// https://learn.microsoft.com/en-us/windows/win32/fileio/testing-for-the-end-of-a-file
+        	if( NumberOfBytesRead == 0 ) {
+        		msg.push_back( EOF );
+        		return false;
+        	}
+
             for( unsigned i = 0; i < NumberOfBytesRead; ++i ) {
                 msg.push_back( buffer[i] );
             }            
             return true;
         } else {
-            // end of file
-            if( msg.empty() || msg.back() != EOF ) {
-                msg.push_back( EOF );
-            }
             return false;
         }
     }
 
     return false;
 }
-#else
-
-#ifdef __CYGWIN__
-# ifndef STDIN_FILENO
-#   define STDIN_FILENO 0
-#  endif
-#endif
-
-static bool read_available_data_from_stdin( std::list<int> & msg )
-{
-    // timeout structure passed into select
-    struct timeval tv;
-    // fd_set passed into select
-    fd_set fds;
-    // Set up the timeout.  here we can wait for 1 second
-    tv.tv_sec = 0;
-    tv.tv_usec = 1000;
-
-    // Zero out the fd_set - make sure it's pristine
-    FD_ZERO(&fds);
-    // Set the FD that we want to read
-    FD_SET(STDIN_FILENO, &fds); //STDIN_FILENO is 0
-    // select takes the last file descriptor value + 1 in the fdset to check,
-    // the fdset for reads, writes, and errors.  We are only passing in reads.
-    // the last parameter is the timeout.  select will return if an FD is ready or
-    // the timeout has occurred
-    select(STDIN_FILENO+1, &fds, NULL, NULL, &tv);
-    // return 0 if STDIN is not ready to be read.
-    if( !FD_ISSET(STDIN_FILENO, &fds) ) {
-        return false;
-    }
-
-    std::string message;
-    std::getline( std::cin, message );
-
-    if( !message.empty() ) {
-        for( unsigned i = 0; i < message.size(); ++i ) {
-            msg.push_back( message[i] );
-        }
-        msg.push_back( '\n' );
-    }
-
-
-    if( std::cin.eof() ) {
-        if( msg.empty() || msg.back() != EOF ) {
-            msg.push_back( EOF );
-        }
-    }
-
-    return true;
-}
-
-#endif
-
 
 std::optional<char> get_char( std::chrono::steady_clock::duration duration = std::chrono::milliseconds(10) )
 {
@@ -199,11 +142,15 @@ int main()
 
         // end of file reached?
         if( c && c == EOF ) {
-        break;
+            break;
         }
 
         if( c ) {
-            std::cout << *c;
+        	if( c == '\r' ) {
+        		std::cout << std::endl;
+        	} else {
+        		std::cout << *c;
+        	}
         }
     } // while
 
